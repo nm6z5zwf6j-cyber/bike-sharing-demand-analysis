@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import sqlite3
@@ -11,16 +12,28 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 SOURCE = "https://archive.ics.uci.edu/static/public/275/bike+sharing+dataset.zip"
+SOURCE_SHA256 = "b70182d0d0508e9abbb79306ce5c0cec34869000f8220175ac83d11dbe845401"
 
 
 def load_data():
     archive = ROOT / "data" / "source.zip"
     archive.parent.mkdir(exist_ok=True)
-    if not archive.exists():
+    if archive.exists():
+        content = archive.read_bytes()
+    else:
         with urllib.request.urlopen(SOURCE, timeout=60) as response:
-            archive.write_bytes(response.read())
-    with zipfile.ZipFile(archive) as z:
-        return list(csv.DictReader(io.StringIO(z.read("hour.csv").decode("utf-8-sig"))))
+            content = response.read()
+    actual_sha256 = hashlib.sha256(content).hexdigest()
+    if actual_sha256 != SOURCE_SHA256:
+        raise ValueError(
+            f"Source archive SHA-256 mismatch: expected {SOURCE_SHA256}, got {actual_sha256}. "
+            "Verify the dataset before updating the pinned checksum."
+        )
+    with zipfile.ZipFile(io.BytesIO(content)) as z:
+        rows = list(csv.DictReader(io.StringIO(z.read("hour.csv").decode("utf-8-sig"))))
+    if not archive.exists():
+        archive.write_bytes(content)
+    return rows
 
 
 def main():

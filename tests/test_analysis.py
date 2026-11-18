@@ -1,5 +1,6 @@
 import contextlib
 import csv
+import hashlib
 import io
 import tempfile
 import unittest
@@ -31,7 +32,8 @@ class AnalysisTests(unittest.TestCase):
         payload = "dteday,hr,workingday,casual,registered,cnt\n" + "\n".join(rows) + "\n"
         with zipfile.ZipFile(self.root / "data" / "source.zip", "w") as z:
             z.writestr("hour.csv", payload)
-        with patch.object(analyze, "ROOT", self.root), contextlib.redirect_stdout(io.StringIO()):
+        digest = hashlib.sha256((self.root / "data" / "source.zip").read_bytes()).hexdigest()
+        with patch.object(analyze, "ROOT", self.root), patch.object(analyze, "SOURCE_SHA256", digest), contextlib.redirect_stdout(io.StringIO()):
             analyze.main()
 
     def test_known_aggregates(self):
@@ -52,6 +54,22 @@ class AnalysisTests(unittest.TestCase):
     def test_rejects_empty_data(self):
         with self.assertRaisesRegex(ValueError, "empty"):
             self.run_with_rows([])
+
+    def test_wrong_cached_checksum_does_not_replace_existing_outputs(self):
+        self.run_with_rows(self.rows)
+        output = self.root / "outputs" / "hourly_demand.csv"
+        previous = output.read_bytes()
+        with patch.object(analyze, "ROOT", self.root), patch.object(analyze, "SOURCE_SHA256", "0" * 64):
+            with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                analyze.main()
+        self.assertEqual(output.read_bytes(), previous)
+
+    def test_wrong_download_is_not_cached(self):
+        response = io.BytesIO(b"unexpected source")
+        with patch.object(analyze, "ROOT", self.root), patch.object(analyze.urllib.request, "urlopen", return_value=response):
+            with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                analyze.main()
+        self.assertFalse((self.root / "data" / "source.zip").exists())
 
 
 if __name__ == "__main__":
